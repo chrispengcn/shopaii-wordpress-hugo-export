@@ -2,84 +2,106 @@
 /**
  * Plugin Name: Shopaii WordPress to Hugo Exporter
  * Plugin URI: https://hugocms.net/wordpress-to-hugo-exporter
- * Description: 将 WordPress 文章、页面、产品及分类导出为 Hugo 兼容的 Markdown 文件
- * Version: 1.1.2
+ * Description: Export WordPress posts, pages, products and categories to Hugo-compatible Markdown files
+ * Version: 1.1.6
  * Author: Chris
  * Author URI: https://hugocms.net
  * License: GPL-2.0+
  */
 
-// 如果直接访问插件文件，则退出
+// Exit if accessed directly
 if (!defined('ABSPATH')) {
     exit;
 }
 
 class Wp_To_Hugo_Exporter {
     /**
-     * 插件实例
+     * Plugin instance
      *
      * @var Wp_To_Hugo_Exporter
      */
     private static $instance;
 
     /**
-     * 插件版本
+     * Plugin version
      *
      * @var string
      */
-    private $version = '1.1.2';
+    private $version = '1.1.6';
 
     /**
-     * 导出目录配置选项
+     * Export directory option name
      *
      * @var string
      */
     private $export_dir_option = 'wp_to_hugo_export_dir';
 
     /**
-     * 导出分类配置选项
+     * Export categories option name
      *
      * @var string
      */
     private $export_categories_option = 'wp_to_hugo_export_categories';
+    
+    /**
+     * Overwrite files option name
+     *
+     * @var string
+     */
+    private $overwrite_files_option = 'wp_to_hugo_overwrite_files';
+    
+    /**
+     * Max export count option name
+     *
+     * @var string
+     */
+    private $max_export_count_option = 'wp_to_hugo_max_export_count';
 
     /**
-     * 导出目录选项
+     * Export directory options
      *
      * @var array
      */
     private $export_dir_options = array(
         'default' => '/wp-content/hugo/_default_project/content/',
-        'default_en' => '/wp-content/hugo/_default_project/content/en/'
+        'english' => '/wp-content/hugo/_default_project/content/en/'
     );
 
     /**
-     * 导出计数
+     * Export count
      *
      * @var int
      */
     private $export_count = 0;
 
     /**
-     * 错误计数
+     * Error count
      *
      * @var int
      */
     private $error_count = 0;
+    
+    /**
+     * Skip count
+     *
+     * @var int
+     */
+    private $skip_count = 0;
 
     /**
-     * 内容类型配置
+     * Content type configuration
+     * Note: Changed post directory from 'posts' to 'blog'
      *
      * @var array
      */
     private $type_config = array(
-        'post' => array('layout' => 'post', 'dir' => 'posts'),
+        'post' => array('layout' => 'post', 'dir' => 'blog'),
         'page' => array('layout' => 'page', 'dir' => 'pages'),
         'product' => array('layout' => 'product', 'dir' => 'products')
     );
 
     /**
-     * 分类配置
+     * Taxonomy configuration
      *
      * @var array
      */
@@ -89,7 +111,7 @@ class Wp_To_Hugo_Exporter {
     );
 
     /**
-     * 获取插件实例（单例模式）
+     * Get plugin instance (singleton pattern)
      *
      * @return Wp_To_Hugo_Exporter
      */
@@ -101,173 +123,155 @@ class Wp_To_Hugo_Exporter {
     }
 
     /**
-     * 构造函数
+     * Constructor
      */
     private function __construct() {
-        // 添加管理菜单
+        // Add admin menu
         add_action('admin_menu', array($this, 'add_admin_menu'));
 
-        // 处理导出请求
+        // Handle export requests
         add_action('admin_post_wp_to_hugo_export', array($this, 'handle_export'));
         
-        // 处理设置保存请求
-        add_action('admin_post_wp_to_hugo_save_settings', array($this, 'save_settings'));
-        
-        // 注册设置
+        // Register settings (for storage only, no separate save functionality)
         add_action('admin_init', array($this, 'register_settings'));
     }
 
     /**
-     * 添加管理菜单
+     * Add admin menu
      */
     public function add_admin_menu() {
+        // Add top-level menu directly as the main functional menu
         add_menu_page(
-            'Hugo 导出工具',
-            'Hugo 导出',
-            'manage_options',
-            'wp-to-hugo-exporter',
-            array($this, 'render_admin_page'),
-            'dashicons-media-text',
-            30
+            'HUGOCMS exporter',  // Page title
+            'HUGOCMS exporter',  // Menu name
+            'manage_options',    // Required capability
+            'wp-to-hugo-exporter', // Menu slug
+            array($this, 'render_admin_page'), // Page rendering callback
+            'dashicons-media-text', // Menu icon
+            30                   // Menu position
         );
     }
 
     /**
-     * 注册设置
+     * Register settings
      */
     public function register_settings() {
         register_setting('wp_to_hugo_options', $this->export_dir_option, 'sanitize_text_field');
         register_setting('wp_to_hugo_options', $this->export_categories_option, 'sanitize_text_field');
-        
-        add_settings_section(
-            'wp_to_hugo_settings',
-            '导出设置',
-            array($this, 'settings_section_callback'),
-            'wp-to-hugo-exporter'
-        );
-        
-        add_settings_field(
-            $this->export_dir_option,
-            '导出目录',
-            array($this, 'export_dir_callback'),
-            'wp-to-hugo-exporter',
-            'wp_to_hugo_settings'
-        );
-        
-        add_settings_field(
-            $this->export_categories_option,
-            '导出分类',
-            array($this, 'export_categories_callback'),
-            'wp-to-hugo-exporter',
-            'wp_to_hugo_settings'
-        );
+        register_setting('wp_to_hugo_options', $this->overwrite_files_option, 'sanitize_text_field');
+        register_setting('wp_to_hugo_options', $this->max_export_count_option, 'intval');
     }
 
     /**
-     * 设置部分回调
-     */
-    public function settings_section_callback() {
-        echo '<p>配置Hugo导出工具的基本设置</p>';
-    }
-
-    /**
-     * 导出目录回调
-     */
-    public function export_dir_callback() {
-        $selected = get_option($this->export_dir_option, 'default');
-        
-        foreach ($this->export_dir_options as $key => $path) {
-            $label = ($key === 'default') ? '默认目录' : '带语言前缀的目录';
-            echo "<label><input type='radio' name='{$this->export_dir_option}' value='{$key}' " . 
-                checked($selected, $key, false) . "> {$label}: <code>{$path}</code></label><br>";
-        }
-    }
-
-    /**
-     * 导出分类回调
-     */
-    public function export_categories_callback() {
-        $selected = get_option($this->export_categories_option, 'all');
-        
-        $options = array(
-            'all' => '所有分类（文章分类和产品分类）',
-            'post' => '仅文章分类',
-            'product' => '仅产品分类',
-            'none' => '不导出分类'
-        );
-        
-        foreach ($options as $key => $label) {
-            echo "<label><input type='radio' name='{$this->export_categories_option}' value='{$key}' " . 
-                checked($selected, $key, false) . "> {$label}</label><br>";
-        }
-    }
-
-    /**
-     * 渲染管理页面
+     * Render admin page
      */
     public function render_admin_page() {
         ?>
         <div class="wrap">
-            <h1>Hugo 导出工具</h1>
+            <h1>Hugo Export Tool</h1>
             
             <?php if (isset($_GET['exported'])) : ?>
                 <div class="updated notice notice-success is-dismissible">
-                    <p>导出完成！共处理 <?php echo intval($_GET['total']); ?> 个项目，成功导出 <?php echo intval($_GET['exported']); ?> 个，失败 <?php echo intval($_GET['errors']); ?> 个。</p>
-                </div>
-            <?php endif; ?>
-            
-            <?php if (isset($_GET['settings_saved'])) : ?>
-                <div class="updated notice notice-success is-dismissible">
-                    <p>设置已保存！</p>
+                    <p>Export completed! Total items processed: <?php echo intval($_GET['total']); ?>, successfully exported: <?php echo intval($_GET['exported']); ?>, skipped: <?php echo intval($_GET['skipped']); ?>, failed: <?php echo intval($_GET['errors']); ?>.</p>
                 </div>
             <?php endif; ?>
             
             <div class="card">
-                <h2 class="title">导出设置</h2>
-                <form method="post" action="<?php echo admin_url('admin-post.php'); ?>">
-                    <input type="hidden" name="action" value="wp_to_hugo_save_settings">
-                    
-                    <?php
-                    settings_fields('wp_to_hugo_options');
-                    do_settings_sections('wp-to-hugo-exporter');
-                    ?>
-                    
-                    <?php submit_button('保存设置', 'primary', 'submit_settings'); ?>
-                </form>
-            </div>
-            
-            <div class="card">
-                <h2 class="title">执行导出</h2>
+                <h2 class="title">Perform Export</h2>
                 <form method="post" action="<?php echo admin_url('admin-post.php'); ?>">
                     <input type="hidden" name="action" value="wp_to_hugo_export">
                     
+                    <h3>Export Settings</h3>
                     <table class="form-table">
+                        <!-- Export directory setting -->
                         <tr>
-                            <th scope="row">导出内容类型</th>
+                            <th scope="row">Export Directory</th>
+                            <td>
+                                <?php 
+                                $selected_dir = get_option($this->export_dir_option, 'default');
+                                foreach ($this->export_dir_options as $key => $path) {
+                                    $label = ($key === 'default') ? 'Default Directory' : 'English Directory';
+                                    echo "<label><input type='radio' name='{$this->export_dir_option}' value='{$key}' " . 
+                                        checked($selected_dir, $key, false) . "> {$label}: <code>{$path}</code></label><br>";
+                                }
+                                ?>
+                            </td>
+                        </tr>
+                        
+                        <!-- Export categories setting -->
+                        <tr>
+                            <th scope="row">Export Categories</th>
+                            <td>
+                                <?php
+                                $selected_cat = get_option($this->export_categories_option, 'all');
+                                $options = array(
+                                    'all' => 'All categories (post categories and product categories)',
+                                    'post' => 'Post categories only',
+                                    'product' => 'Product categories only',
+                                    'none' => 'Do not export categories'
+                                );
+                                
+                                foreach ($options as $key => $label) {
+                                    echo "<label><input type='radio' name='{$this->export_categories_option}' value='{$key}' " . 
+                                        checked($selected_cat, $key, false) . "> {$label}</label><br>";
+                                }
+                                ?>
+                            </td>
+                        </tr>
+                        
+                        <!-- Overwrite files setting -->
+                        <tr>
+                            <th scope="row">Overwrite Options</th>
+                            <td>
+                                <?php
+                                $selected_overwrite = get_option($this->overwrite_files_option, 'no');
+                                echo "<label><input type='radio' name='{$this->overwrite_files_option}' value='yes' " . 
+                                    checked($selected_overwrite, 'yes', false) . "> Yes - Overwrite existing files</label><br>";
+                                echo "<label><input type='radio' name='{$this->overwrite_files_option}' value='no' " . 
+                                    checked($selected_overwrite, 'no', false) . "> No - Skip existing files</label><br>";
+                                ?>
+                            </td>
+                        </tr>
+                        
+                        <!-- Max export count setting -->
+                        <tr>
+                            <th scope="row">Maximum Export Count</th>
+                            <td>
+                                <?php
+                                $max_count = get_option($this->max_export_count_option, 1000);
+                                echo "<input type='number' name='{$this->max_export_count_option}' value='{$max_count}' min='1' max='10000' style='width: 100px;'>";
+                                echo "<p class='description'>Set the maximum number of records to export</p>";
+                                ?>
+                            </td>
+                        </tr>
+                        
+                        <!-- Content type selection -->
+                        <tr>
+                            <th scope="row">Content Type to Export</th>
                             <td>
                                 <fieldset>
-                                    <legend class="screen-reader-text"><span>导出内容类型</span></legend>
-                                    <label><input type="radio" name="post_type" value="any" checked> 所有类型</label><br>
-                                    <label><input type="radio" name="post_type" value="post"> 文章</label><br>
-                                    <label><input type="radio" name="post_type" value="page"> 页面</label><br>
-                                    <label><input type="radio" name="post_type" value="product"> 产品</label>
+                                    <legend class="screen-reader-text"><span>Content Type to Export</span></legend>
+                                    <label><input type="radio" name="post_type" value="any" checked> All types</label><br>
+                                    <label><input type="radio" name="post_type" value="post"> Posts</label><br>
+                                    <label><input type="radio" name="post_type" value="page"> Pages</label><br>
+                                    <label><input type="radio" name="post_type" value="product"> Products</label>
                                 </fieldset>
                             </td>
                         </tr>
                     </table>
                     
-                    <?php submit_button('开始导出', 'primary', 'submit_export'); ?>
+                    <?php submit_button('Start Export', 'primary', 'submit_export'); ?>
                 </form>
             </div>
             
             <div class="card">
-                <h2 class="title">导出目录信息</h2>
-                <p>Markdown 文件将导出到以下目录：</p>
+                <h2 class="title">Export Directory Information</h2>
+                <p>Markdown files will be exported to the following directory:</p>
                 <code><?php echo esc_html($this->get_export_directory()); ?></code>
                 <?php if (is_dir($this->get_export_directory())) : ?>
-                    <p class="description">目录已存在</p>
+                    <p class="description">Directory exists</p>
                 <?php else : ?>
-                    <p class="description notice notice-warning inline">目录不存在，将在导出时创建</p>
+                    <p class="description notice notice-warning inline">Directory does not exist, will be created during export</p>
                 <?php endif; ?>
             </div>
         </div>
@@ -275,7 +279,7 @@ class Wp_To_Hugo_Exporter {
     }
 
     /**
-     * 获取导出目录
+     * Get export directory
      *
      * @return string
      */
@@ -285,50 +289,33 @@ class Wp_To_Hugo_Exporter {
     }
 
     /**
-     * 保存设置
-     */
-    public function save_settings() {
-        // 检查权限
-        if (!current_user_can('manage_options')) {
-            wp_die('你没有执行此操作的权限。');
-        }
-        
-        // 保存设置
-        update_option($this->export_dir_option, sanitize_text_field($_POST[$this->export_dir_option]));
-        update_option($this->export_categories_option, sanitize_text_field($_POST[$this->export_categories_option]));
-        
-        // 重定向回管理页面并显示结果
-        wp_redirect(
-            add_query_arg(
-                array(
-                    'page' => 'wp-to-hugo-exporter',
-                    'settings_saved' => '1'
-                ),
-                admin_url('admin.php')
-            )
-        );
-        exit;
-    }
-
-    /**
-     * 处理导出请求
+     * Handle export request
      */
     public function handle_export() {
-        // 检查权限
+        // Check permissions
         if (!current_user_can('manage_options')) {
-            wp_die('你没有执行此操作的权限。');
+            wp_die('You do not have permission to perform this action.');
         }
 
-        // 检查导出类型
+        // Save current settings (from form submission)
+        update_option($this->export_dir_option, sanitize_text_field($_POST[$this->export_dir_option]));
+        update_option($this->export_categories_option, sanitize_text_field($_POST[$this->export_categories_option]));
+        update_option($this->overwrite_files_option, sanitize_text_field($_POST[$this->overwrite_files_option]));
+        update_option($this->max_export_count_option, intval($_POST[$this->max_export_count_option]));
+        
+        // Check export type
         $post_type = isset($_POST['post_type']) ? sanitize_key($_POST['post_type']) : 'any';
         
-        // 确保导出目录存在
+        // Get maximum export count
+        $max_export_count = get_option($this->max_export_count_option, 1000);
+        
+        // Ensure export directory exists
         $this->ensure_export_directory_exists();
 
-        // 导出内容
-        $total_content = $this->export_content($post_type);
+        // Export content
+        $total_content = $this->export_content($post_type, $max_export_count);
         
-        // 导出分类
+        // Export categories
         $export_categories = get_option($this->export_categories_option, 'all');
         $total_categories = 0;
         
@@ -343,6 +330,7 @@ class Wp_To_Hugo_Exporter {
                 $taxonomies[] = 'product_cat';
             }
             
+            // No limit on category exports
             foreach ($taxonomies as $taxonomy) {
                 $total_categories += $this->export_taxonomy_terms($taxonomy);
             }
@@ -350,13 +338,14 @@ class Wp_To_Hugo_Exporter {
         
         $total = $total_content + $total_categories;
 
-        // 重定向回管理页面并显示结果
+        // Redirect back to admin page with results
         wp_redirect(
             add_query_arg(
                 array(
                     'page' => 'wp-to-hugo-exporter',
                     'total' => $total,
                     'exported' => $this->export_count,
+                    'skipped' => $this->skip_count,
                     'errors' => $this->error_count
                 ),
                 admin_url('admin.php')
@@ -366,17 +355,17 @@ class Wp_To_Hugo_Exporter {
     }
 
     /**
-     * 确保导出目录存在
+     * Ensure export directory exists
      */
     private function ensure_export_directory_exists() {
         $export_dir = $this->get_export_directory();
         
-        // 创建主导出目录
+        // Create main export directory
         if (!is_dir($export_dir)) {
             mkdir($export_dir, 0755, true);
         }
         
-        // 为每种内容类型创建子目录
+        // Create subdirectories for each content type
         foreach ($this->type_config as $config) {
             $type_dir = trailingslashit($export_dir) . $config['dir'];
             if (!is_dir($type_dir)) {
@@ -384,7 +373,7 @@ class Wp_To_Hugo_Exporter {
             }
         }
         
-        // 为每种分类类型创建子目录
+        // Create subdirectories for each taxonomy type
         foreach ($this->taxonomy_config as $config) {
             $taxonomy_dir = trailingslashit($export_dir) . $config['dir'];
             if (!is_dir($taxonomy_dir)) {
@@ -394,34 +383,42 @@ class Wp_To_Hugo_Exporter {
     }
 
     /**
-     * 导出指定类型的内容
+     * Export content of specified type
      *
-     * @param string $post_type 内容类型
-     * @return int 处理的项目总数
+     * @param string $post_type Content type
+     * @param int $max_count Maximum export count
+     * @return int Total number of items processed
      */
-    private function export_content($post_type) {
+    private function export_content($post_type, $max_count) {
         global $wpdb;
         
-        // 构建查询条件
+        // Build query conditions
         $where_clause = '';
         if ($post_type != 'any') {
             $where_clause = $wpdb->prepare("AND post_type = %s", $post_type);
         } else {
-            // 只查询post, page, product类型
+            // Only query post, page, product types
             $where_clause = "AND post_type IN ('post', 'page', 'product')";
         }
         
-        // 查询文章
+        // Add LIMIT clause if maximum count is set
+        $limit_clause = '';
+        if ($max_count > 0) {
+            $limit_clause = $wpdb->prepare("LIMIT %d", $max_count);
+        }
+        
+        // Query posts
         $query = "
             SELECT * FROM {$wpdb->posts} 
             WHERE post_status = 'publish' {$where_clause}
             ORDER BY post_date DESC
+            {$limit_clause}
         ";
         $posts = $wpdb->get_results($query);
         
         $total = count($posts);
         
-        // 导出每篇文章
+        // Export each post
         foreach ($posts as $post) {
             try {
                 $this->export_post($post);
@@ -434,15 +431,15 @@ class Wp_To_Hugo_Exporter {
     }
 
     /**
-     * 导出单个文章
+     * Export a single post
      *
-     * @param object $post 文章对象
+     * @param object $post Post object
      */
     private function export_post($post) {
         $post_id = $post->ID;
         $post_type = $post->post_type;
         
-        // 跳过未知类型
+        // Skip unknown types
         if (!isset($this->type_config[$post_type])) {
             return;
         }
@@ -451,34 +448,43 @@ class Wp_To_Hugo_Exporter {
         $layout = $config['layout'];
         $type_dir = $config['dir'];
         
-        // 构建导出目录
+        // Build export directory
         $export_dir = trailingslashit($this->get_export_directory()) . $type_dir;
         
-        // 获取文章基本信息
+        // Get basic post information
         $title = $post->post_title;
         $slug = $post->post_name;
         $date = $post->post_date;
         $content = $post->post_content;
         $permalink = trailingslashit(home_url()) . $slug . '/';
         
-        // 格式化日期
+        // Format date
         $date_obj = date_create($date);
         $date_str = date_format($date_obj, 'Y-m-d');
         
-        // 生成文件名
+        // Generate filename
         $filename = $date_str . '-' . $slug . '.md';
         $file_path = trailingslashit($export_dir) . $filename;
         
-        // 获取分类
+        // Check if overwriting files
+        $overwrite_files = get_option($this->overwrite_files_option, 'no') === 'yes';
+        
+        // If file exists and not overwriting, skip
+        if (file_exists($file_path) && !$overwrite_files) {
+            $this->skip_count++;
+            return;
+        }
+        
+        // Get categories
         $categories = $this->get_categories($post_id);
         
-        // 获取标签
+        // Get tags
         $tags = $this->get_tags($post_id);
         
-        // 获取特色图片
+        // Get featured image
         $featured_image = $this->get_featured_image($post_id);
         
-        // 构建Markdown文件内容
+        // Build Markdown file content
         $md_content = "---\n";
         $md_content .= "layout: {$layout}\n";
         $md_content .= "title: \"{$this->escape_yaml_string($title)}\"\n";
@@ -487,7 +493,7 @@ class Wp_To_Hugo_Exporter {
         $md_content .= "permalink: \"{$permalink}\"\n";
         $md_content .= "date: {$date}\n";
         
-        // 分类
+        // Categories
         if (!empty($categories)) {
             $md_content .= "categories:\n";
             foreach ($categories as $category) {
@@ -497,48 +503,49 @@ class Wp_To_Hugo_Exporter {
             $md_content .= "categories: []\n";
         }
         
-        // 特色图片
+        // Featured image
         $md_content .= "featureImage: {$featured_image}\n";
         $md_content .= "image: {$featured_image}\n";
         
-        // 标签
+        // Tags
         if (!empty($tags)) {
             $md_content .= "tags: [" . implode(', ', array_map(array($this, 'escape_yaml_string_tag'), $tags)) . "]\n";
         } else {
             $md_content .= "tags: []\n";
         }
         
-        // 如果是产品类型，添加额外的产品字段
+        // If product type, add additional product fields
         if ($post_type == 'product') {
             $md_content .= $this->get_product_metadata($post_id);
         }
         
         $md_content .= "---\n\n";
         
-        // 处理内容
+        // Process content
         $content = $this->process_content($content);
         $md_content .= $content;
         
-        // 写入文件
+        // Write to file
         file_put_contents($file_path, $md_content);
         
         $this->export_count++;
     }
 
     /**
-     * 获取Hugo风格的URL
+     * Get Hugo-style URL
+     * Note: Changed post URL path from /posts/ to /blog/
      *
-     * @param object $post 文章对象
-     * @return string Hugo风格的URL
+     * @param object $post Post object
+     * @return string Hugo-style URL
      */
     private function get_hugo_url($post) {
         $post_type = $post->post_type;
         $slug = $post->post_name;
         
-        // 处理不同内容类型的URL格式
+        // Handle URL formats for different content types
         switch ($post_type) {
             case 'post':
-                return "/posts/{$slug}/";
+                return "/blog/{$slug}/";
             case 'page':
                 return "/{$slug}/";
             case 'product':
@@ -549,10 +556,10 @@ class Wp_To_Hugo_Exporter {
     }
 
     /**
-     * 导出特定分类法的所有术语
+     * Export all terms of a specific taxonomy
      *
-     * @param string $taxonomy 分类法名称
-     * @return int 处理的项目总数
+     * @param string $taxonomy Taxonomy name
+     * @return int Total number of items processed
      */
     private function export_taxonomy_terms($taxonomy) {
         if (!isset($this->taxonomy_config[$taxonomy])) {
@@ -578,20 +585,20 @@ class Wp_To_Hugo_Exporter {
     }
 
     /**
-     * 导出单个分类术语
+     * Export a single taxonomy term
      *
-     * @param object $term 分类术语对象
-     * @param string $taxonomy 分类法名称
+     * @param object $term Term object
+     * @param string $taxonomy Taxonomy name
      */
     private function export_taxonomy_term($term, $taxonomy) {
         $config = $this->taxonomy_config[$taxonomy];
         $layout = $config['layout'];
         $dir_name = $config['dir'];
         
-        // 构建导出目录
+        // Build export directory
         $export_dir = trailingslashit($this->get_export_directory()) . $dir_name;
         
-        // 获取基本信息
+        // Get basic information
         $term_id = $term->term_id;
         $name = $term->name;
         $slug = $term->slug;
@@ -599,11 +606,20 @@ class Wp_To_Hugo_Exporter {
         $parent_id = $term->parent;
         $count = $term->count;
         
-        // 生成文件名
+        // Generate filename
         $filename = "{$slug}.md";
         $file_path = trailingslashit($export_dir) . $filename;
         
-        // 获取父分类名称
+        // Check if overwriting files
+        $overwrite_files = get_option($this->overwrite_files_option, 'no') === 'yes';
+        
+        // If file exists and not overwriting, skip
+        if (file_exists($file_path) && !$overwrite_files) {
+            $this->skip_count++;
+            return;
+        }
+        
+        // Get parent category name
         $parent_name = '';
         if ($parent_id > 0) {
             $parent_term = get_term($parent_id, $taxonomy);
@@ -612,7 +628,7 @@ class Wp_To_Hugo_Exporter {
             }
         }
         
-        // 构建Markdown文件内容
+        // Build Markdown file content
         $md_content = "---\n";
         $md_content .= "layout: {$layout}\n";
         $md_content .= "title: \"{$this->escape_yaml_string($name)}\"\n";
@@ -631,17 +647,17 @@ class Wp_To_Hugo_Exporter {
         $md_content .= "count: {$count}\n";
         $md_content .= "---\n\n";
         
-        // 写入文件
+        // Write to file
         file_put_contents($file_path, $md_content);
         
         $this->export_count++;
     }
 
     /**
-     * 获取文章分类
+     * Get post categories
      *
-     * @param int $post_id 文章ID
-     * @return array 分类名称数组
+     * @param int $post_id Post ID
+     * @return array Array of category names
      */
     private function get_categories($post_id) {
         $categories = get_the_category($post_id);
@@ -649,10 +665,10 @@ class Wp_To_Hugo_Exporter {
     }
 
     /**
-     * 获取文章标签
+     * Get post tags
      *
-     * @param int $post_id 文章ID
-     * @return array 标签名称数组
+     * @param int $post_id Post ID
+     * @return array Array of tag names
      */
     private function get_tags($post_id) {
         $tags = get_the_tags($post_id);
@@ -660,10 +676,10 @@ class Wp_To_Hugo_Exporter {
     }
 
     /**
-     * 获取特色图片URL
+     * Get featured image URL
      *
-     * @param int $post_id 文章ID
-     * @return string 特色图片URL
+     * @param int $post_id Post ID
+     * @return string Featured image URL
      */
     private function get_featured_image($post_id) {
         $image_id = get_post_thumbnail_id($post_id);
@@ -674,57 +690,57 @@ class Wp_To_Hugo_Exporter {
     }
 
     /**
-     * 获取产品元数据
+     * Get product metadata
      *
-     * @param int $post_id 文章ID
-     * @return string 元数据YAML字符串
+     * @param int $post_id Post ID
+     * @return string Metadata YAML string
      */
     private function get_product_metadata($post_id) {
         $metadata = '';
         
-        // 获取SKU
+        // Get SKU
         $sku = get_post_meta($post_id, '_sku', true);
         $metadata .= "sku: \"{$this->escape_yaml_string($sku)}\"\n";
         
-        // 获取产品分类
+        // Get product categories
         $product_cats = wp_get_post_terms($post_id, 'product_cat', array('fields' => 'names'));
         $metadata .= "product_categories:\n";
         foreach ($product_cats as $cat) {
             $metadata .= "- {$this->escape_yaml_string($cat)}\n";
         }
         
-        // 获取产品标签
+        // Get product tags
         $product_tags = wp_get_post_terms($post_id, 'product_tag', array('fields' => 'names'));
         $metadata .= "product_tags:\n";
         foreach ($product_tags as $tag) {
             $metadata .= "- {$this->escape_yaml_string($tag)}\n";
         }
         
-        // 获取产品URL
+        // Get product URL
         $product_url = get_post_meta($post_id, '_product_url', true);
         if ($product_url) {
             $metadata .= "buy_link: {$this->escape_yaml_string($product_url)}\n";
         } else {
-            // 否则使用原来的_buy_link
+            // Otherwise use original _buy_link
             $buy_link = get_post_meta($post_id, '_buy_link', true);
             if ($buy_link) {
                 $metadata .= "buy_link: {$this->escape_yaml_string($buy_link)}\n";
             }
         }
         
-        // 获取产品图片
+        // Get product images
         $gallery_ids = get_post_meta($post_id, '_product_image_gallery', true);
         $gallery_ids = explode(',', $gallery_ids);
         
         $metadata .= "images:\n";
         
-        // 先添加特色图片
+        // Add featured image first
         $featured_image = $this->get_featured_image($post_id);
         if ($featured_image) {
             $metadata .= "- {$featured_image}\n";
         }
         
-        // 再添加产品图库图片
+        // Then add product gallery images
         foreach ($gallery_ids as $img_id) {
             if (!empty($img_id)) {
                 $img_url = wp_get_attachment_url($img_id);
@@ -734,7 +750,7 @@ class Wp_To_Hugo_Exporter {
             }
         }
         
-        // 获取产品简短描述
+        // Get product short description
         $short_description = get_post_meta($post_id, '_short_description', true);
         if ($short_description) {
             $escaped_description = $this->escape_yaml_string($short_description);
@@ -745,53 +761,53 @@ class Wp_To_Hugo_Exporter {
     }
 
     /**
-     * 处理文章内容
+     * Process post content
      *
-     * @param string $content 文章内容
-     * @return string 处理后的内容
+     * @param string $content Post content
+     * @return string Processed content
      */
     private function process_content($content) {
-        // 这里可以添加更多内容处理逻辑
-        // 例如将WordPress的短代码转换为Markdown等
+        // Additional content processing logic can be added here
+        // For example converting WordPress shortcodes to Markdown
         
-        // 简单地转义HTML实体
+        // Simply decode HTML entities
         $content = html_entity_decode($content, ENT_QUOTES, 'UTF-8');
         
         return $content;
     }
 
     /**
-     * 转义YAML字符串
+     * Escape YAML string
      *
-     * @param string $string 要转义的字符串
-     * @return string 转义后的字符串
+     * @param string $string String to escape
+     * @return string Escaped string
      */
     private function escape_yaml_string($string) {
         if (empty($string)) {
             return '';
         }
         
-        // 替换双引号
+        // Replace double quotes
         $string = str_replace('"', '\\"', $string);
         
-        // 处理多行字符串
+        // Handle multi-line strings
         $string = preg_replace('/\n/', '\\n  ', $string);
         
         return $string;
     }
 
     /**
-     * 转义YAML标签字符串
+     * Escape YAML tag string
      *
-     * @param string $string 要转义的字符串
-     * @return string 转义后的字符串
+     * @param string $string String to escape
+     * @return string Escaped string
      */
     private function escape_yaml_string_tag($string) {
         return '"' . $this->escape_yaml_string($string) . '"';
     }
 }
 
-// 初始化插件
+// Initialize plugin
 function wp_to_hugo_exporter_init() {
     Wp_To_Hugo_Exporter::get_instance();
 }
